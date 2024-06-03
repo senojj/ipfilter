@@ -4,7 +4,9 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -45,10 +47,10 @@ type List struct {
 	LastRefresh time.Time
 }
 
-// NewList creates a new bad ip List and sets its internal array capacity
+// NewList creates a new bad ip *List and sets its internal array capacity
 // to the given size value.
-func NewList(size int) List {
-	return List{
+func NewList(size int) *List {
+	return &List{
 		values: make([]*net.IPNet, size),
 	}
 }
@@ -118,14 +120,16 @@ func (l *List) Add(addresses []*net.IPNet) {
 type GitHubLoader struct {
 	archiveURL     string
 	fileSuffixList []string
+	logger         *slog.Logger
 }
 
 // NewGitHubLoader returns a newly instantiated GitHubLoader with the provided
 // configuration parameters.
-func NewGitHubLoader(archiveURL string, fileSuffixList []string) *GitHubLoader {
+func NewGitHubLoader(archiveURL string, fileSuffixList []string, logger *slog.Logger) *GitHubLoader {
 	return &GitHubLoader{
 		archiveURL:     archiveURL,
 		fileSuffixList: fileSuffixList,
+		logger:         logger,
 	}
 }
 
@@ -135,6 +139,10 @@ func NewGitHubLoader(archiveURL string, fileSuffixList []string) *GitHubLoader {
 // Load will make a GET request to the repository to download a zip archive
 // of the entire master branch. All addresses contained within the archive files
 // are parsed into valid net.IPNet values before being added to the List.
+//
+// The found value indicates the number of valid values that were identified in
+// the archive. If the found value is greater than the length of the List, then
+// the capacity of the List was not sufficient to hold all found values.
 func (l *GitHubLoader) Load(list *List) (found int, err error) {
 	// Record an attempt to refresh the list.
 	list.LastRefresh = time.Now()
@@ -150,6 +158,7 @@ func (l *GitHubLoader) Load(list *List) (found int, err error) {
 	tETag := resp.Header.Get("ETag")
 
 	if tETag == list.Version {
+		l.logger.Debug("version unchanged", "version", list.Version)
 		return
 	}
 
@@ -204,7 +213,7 @@ func (l *GitHubLoader) Load(list *List) (found int, err error) {
 	// the amount of time that a write lock will be held on the list.
 	// An alternative would be to write directly to the list.values array,
 	// however, an error during parsing could leave the list in a broken state.
-	results := make([]*net.IPNet, 0, cap(list.values))
+	results := make([]chan *net.IPNet, 0, len(zipReader.File))
 	for _, file := range zipReader.File {
 		if file.FileHeader.FileInfo().IsDir() {
 			continue
@@ -224,27 +233,58 @@ func (l *GitHubLoader) Load(list *List) (found int, err error) {
 		var f io.ReadCloser
 		f, err = file.Open()
 		if err != nil {
-			return
+			l.logger.Warn(fmt.Sprintf("open file: %e", err), "file", file.Name)
+			continue
 		}
-		scn := bufio.NewScanner(f)
-		for scn.Scan() {
-			line := scn.Text()
-			if strings.HasPrefix(line, "#") {
-				continue
+		ch := make(chan *net.IPNet, 100)
+		go func() {
+			defer close(ch)
+			defer f.Close()
+
+			scn := bufio.NewScanner(f)
+			for scn.Scan() {
+				line := scn.Text()
+				if strings.HasPrefix(line, "#") {
+					continue
+				}
+				var addr *net.IPNet
+				addr, err = parseAddress(strings.TrimSpace(line))
+				if err != nil {
+					l.logger.Warn(fmt.Sprintf("parse address: %e", err), "address", line)
+					continue
+				}
+				ch <- addr
 			}
-			var addr *net.IPNet
-			addr, err = parseAddress(strings.TrimSpace(line))
-			if err != nil {
-				return
-			}
-			found++
-			if found <= cap(list.values) {
-				results = append(results, addr)
-			}
-		}
-		_ = f.Close()
+		}()
+		results = append(results, ch)
 	}
-	list.Add(results)
+	collection := make([]*net.IPNet, 0, cap(list.values))
+
+	for {
+		var alive bool
+
+		// iterate over channels and pull out the next available item, but
+		// don't wait for an item to become available.
+		for i := 0; i < len(results); i++ {
+			select {
+			case v, ok := <-results[i]:
+				if ok {
+					collection = append(collection, v)
+					alive = true
+				}
+			default:
+				// the channel is still open, but there weren't any items
+				// waiting to be processed.
+				alive = true
+			}
+		}
+		if !alive {
+			// all channels have been closed at this point
+			break
+		}
+	}
+	found = len(collection)
+	list.Add(collection)
 	list.Version = tETag
 	return
 }

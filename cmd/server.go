@@ -48,9 +48,9 @@ func main() {
 		return
 	}
 
-	loader := badip.NewGitHubLoader(settings.ArchiveURL, settings.FileSuffixList)
+	loader := badip.NewGitHubLoader(settings.ArchiveURL, settings.FileSuffixList, logger)
 	list := badip.NewList(1_000_000)
-	found, err := loader.Load(&list)
+	found, err := loader.Load(list)
 	if err != nil {
 		logger.Error(fmt.Sprintf("unable to load bad ip list: %e", err))
 		return
@@ -79,7 +79,7 @@ func main() {
 				break L
 			case <-refreshTimer.C:
 				refreshTimer.Reset(refreshDuration * time.Second)
-				found, err := loader.Load(&list)
+				found, err := loader.Load(list)
 				if err != nil {
 					logger.Warn(fmt.Sprintf("unable to load bad ip list: %e", err))
 				} else {
@@ -91,9 +91,9 @@ func main() {
 		done <- struct{}{}
 	}()
 
-	r.Use(api.ListProvider())
+	r.Use(api.ListProvider(list))
 
-	r.GET("health", api.Health(&list, refreshDuration))
+	r.GET("health", api.Health(list, refreshDuration))
 	r.GET("is-bad-ip", api.IsBadIP)
 
 	srv := &http.Server{
