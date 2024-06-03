@@ -1,0 +1,11 @@
+{
+  "archive_url": "https://github.com/firehol/blocklist-ipsets/archive/refs/heads/master.zip",
+  "refresh_seconds": 10,
+  "file_suffix_list": [
+    "firehol_level1.netset",
+    "firehol_level2.netset",
+    "firehol_level3.netset",
+    "firehol_level4.netset",
+    "country_cn.netset"
+  ]
+}
