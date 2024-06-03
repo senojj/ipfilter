@@ -1,8 +1,8 @@
 package api
 
 import (
-	"firehol/pkg/badip"
 	"github.com/gin-gonic/gin"
+	"ipfilter/pkg/iplist"
 	"net"
 	"net/http"
 	"strings"
@@ -17,7 +17,7 @@ type result struct {
 }
 
 func IsBadIP(c *gin.Context) {
-	list := c.MustGet("bad_ip_list").(*badip.List)
+	list := c.MustGet("bad_ip_list").(*iplist.List)
 	address := c.Query("address")
 	if strings.TrimSpace(address) == "" {
 		c.JSON(http.StatusBadRequest, msg{

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"firehol/pkg/api"
-	"firehol/pkg/badip"
-	"firehol/pkg/config"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"ipfilter/pkg/api"
+	"ipfilter/pkg/config"
+	"ipfilter/pkg/iplist"
 	"log"
 	"log/slog"
 	"net/http"
@@ -42,33 +42,35 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan struct{}, 1)
+
 	settings, err := config.Load("./config.json")
 	if err != nil {
 		logger.Error(fmt.Sprintf("unable to load configuration: %e", err))
 		return
 	}
 
-	loader := badip.NewGitHubLoader(settings.ArchiveURL, settings.FileSuffixList, logger)
-	list := badip.NewList(1_000_000)
-	found, err := loader.Load(list)
-	if err != nil {
-		logger.Error(fmt.Sprintf("unable to load bad ip list: %e", err))
-		return
-	}
-
-	length := list.Len()
-	if length != found {
-		logger.Warn("number of found bad addresses was not equal to stored number", "found", found, "stored", length)
-	}
-	logger.Debug("bad ip list refreshed.", "found", found, "stored", length)
-
-	r := gin.Default()
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
-	done := make(chan struct{}, 1)
+	loader := iplist.NewGitHubLoader(settings.ArchiveURL, settings.FileSuffixList, logger)
+	list := iplist.NewList(1_000_000)
 
 	refreshDuration := time.Duration(settings.RefreshSeconds)
+
+	healthHandle := api.Health(list, refreshDuration)
+
+	_, err = loader.Load(list)
+	if err != nil {
+		if errors.Is(err, iplist.UnchangedVersion) {
+			// This is the first time the List was loaded, so the version
+			// must be different. The problem may rectify itself on a following
+			// refresh, but a warning should be raised.
+			logger.Warn("bad ip list version unchanged", "version", list.Version)
+		} else {
+			logger.Error(fmt.Sprintf("unable to load bad ip list: %e", err))
+			return
+		}
+	}
 
 	go func() {
 		refreshTimer := time.NewTimer(refreshDuration * time.Second)
@@ -80,10 +82,10 @@ func main() {
 			case <-refreshTimer.C:
 				refreshTimer.Reset(refreshDuration * time.Second)
 				found, err := loader.Load(list)
-				if err != nil {
+				if err != nil && !errors.Is(err, iplist.UnchangedVersion) {
 					logger.Warn(fmt.Sprintf("unable to load bad ip list: %e", err))
 				} else {
-					logger.Debug("bad ip list refreshed.", "found", found, "stored", list.Len())
+					logger.Debug("bad ip list refreshed.", "new", found, "stored", list.Len())
 				}
 			}
 		}
@@ -91,9 +93,11 @@ func main() {
 		done <- struct{}{}
 	}()
 
+	r := gin.Default()
+
 	r.Use(api.ListProvider(list))
 
-	r.GET("health", api.Health(list, refreshDuration))
+	r.GET("health", healthHandle)
 	r.GET("is-bad-ip", api.IsBadIP)
 
 	srv := &http.Server{

@@ -1,4 +1,4 @@
-module firehol
+module ipfilter
 
 go 1.22
 

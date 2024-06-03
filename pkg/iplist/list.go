@@ -1,9 +1,10 @@
-package badip
+package iplist
 
 import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,8 @@ import (
 // maxDownloadBytes is a defensive measure to prevent a malicious
 // man-in-the-middle from causing memory exhaustion in this service.
 const maxDownloadBytes int = 50_000_000 // 50MB
+
+var UnchangedVersion = errors.New("version unchanged")
 
 // parseAddress turns a string network address into a full CIDR
 // and parses the resulting CIDR into a net.IPNet value. Any
@@ -158,7 +161,7 @@ func (l *GitHubLoader) Load(list *List) (found int, err error) {
 	tETag := resp.Header.Get("ETag")
 
 	if tETag == list.Version {
-		l.logger.Debug("version unchanged", "version", list.Version)
+		err = UnchangedVersion
 		return
 	}
 
