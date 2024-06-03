@@ -9,6 +9,10 @@ the moment of allocation to prevent operations such as growing and shrinking.
 
 The bad IP list data refresh system was designed for highly concurrent reads, with infrequent writes.
 
+If the bad IP list data became too large to keep in service instance memory, I would suggest introducing a distributed
+data store like Redis. This would require a separate producer instance to keep the data in Redis "fresh", so that the
+client serving instances could just be consumers of the data.
+
 ## Features
 Utilizes a configuration file in which any number of file name suffixes can be listed, indicating that files having a 
 name that matches any listed suffix should comprise the master bad IP address list.
