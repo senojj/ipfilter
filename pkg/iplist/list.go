@@ -16,11 +16,8 @@ import (
 	"net/http"
 )
 
-// maxDownloadBytes is a defensive measure to prevent a malicious
-// man-in-the-middle from causing memory exhaustion in this service.
-const maxDownloadBytes int = 50_000_000 // 50MB
-
 var UnchangedVersion = errors.New("version unchanged")
+var OversizeDownload = errors.New("oversize download")
 
 // parseAddress turns a string network address into a full CIDR
 // and parses the resulting CIDR into a net.IPNet value. Any
@@ -121,18 +118,25 @@ func (l *List) Add(addresses []*net.IPNet) {
 // the archive whose name suffix matches the values in fileSuffixList will
 // be processed.
 type GitHubLoader struct {
-	archiveURL     string
-	fileSuffixList []string
-	logger         *slog.Logger
+	archiveURL       string
+	maxDownloadBytes int
+	fileSuffixList   []string
+	logger           *slog.Logger
 }
 
 // NewGitHubLoader returns a newly instantiated GitHubLoader with the provided
 // configuration parameters.
-func NewGitHubLoader(archiveURL string, fileSuffixList []string, logger *slog.Logger) *GitHubLoader {
+func NewGitHubLoader(
+	archiveURL string,
+	maxDownloadBytes int,
+	fileSuffixList []string,
+	logger *slog.Logger,
+) *GitHubLoader {
 	return &GitHubLoader{
-		archiveURL:     archiveURL,
-		fileSuffixList: fileSuffixList,
-		logger:         logger,
+		archiveURL:       archiveURL,
+		maxDownloadBytes: maxDownloadBytes,
+		fileSuffixList:   fileSuffixList,
+		logger:           logger,
 	}
 }
 
@@ -176,28 +180,25 @@ func (l *GitHubLoader) Load(list *List) (found int, err error) {
 	// Allocate an initial amount of space to hold the downloaded
 	// data. This will mitigate growth operations of the backing
 	// array.
-	buf := bytes.NewBuffer(make([]byte, 0, maxDownloadBytes))
+	buf := bytes.NewBuffer(make([]byte, 0, l.maxDownloadBytes))
 
 	// Since the response body has a transfer encoding of "chunked"
 	// we will not know the size of the payload before reading to
-	// EOF. Therefore, io.Copy is not a safe choice to use here, as
+	// EOF. Therefore, an io.LimitedReader is used here, as
 	// a malicious downstream server could send an unbounded payload.
-	// Instead, calls to Read will be made iteratively, 1024 bytes at
-	// time, up to maxDownloadBytes.
-	ibuf := make([]byte, 1024)
-	for i := 0; i < maxDownloadBytes; {
-		var bread int
-		bread, err = resp.Body.Read(ibuf)
-		if err == io.EOF && bread == 0 {
-			break
-		}
-		if err != nil {
-			return
-		}
-		buf.Write(ibuf[:bread])
-		i += bread
+	limitedReader := io.LimitReader(resp.Body, int64(buf.Cap()))
+	copied, err := io.Copy(buf, limitedReader)
+	if err != nil {
+		return
 	}
-	copied := int64(buf.Len())
+
+	// Check to make sure the entire payload fit into memory.
+	tmp := make([]byte, 1)
+	bread, err := resp.Body.Read(tmp)
+	if bread > 0 {
+		err = OversizeDownload
+		return
+	}
 
 	// An error resulting from closing the body may be indicative
 	// of an issue with the response payload.

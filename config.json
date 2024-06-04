@@ -1,5 +1,6 @@
 {
   "archive_url": "https://github.com/firehol/blocklist-ipsets/archive/refs/heads/master.zip",
+  "max_download_bytes": 50000000,
   "refresh_seconds": 10,
   "file_suffix_list": [
     "firehol_level1.netset",

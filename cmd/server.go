@@ -52,7 +52,12 @@ func main() {
 		return
 	}
 
-	loader := iplist.NewGitHubLoader(settings.ArchiveURL, settings.FileSuffixList, logger)
+	loader := iplist.NewGitHubLoader(
+		settings.ArchiveURL,
+		settings.MaxDownloadBytes,
+		settings.FileSuffixList,
+		logger,
+	)
 	list := iplist.NewList(1_000_000)
 
 	refreshDuration := time.Duration(settings.RefreshSeconds)

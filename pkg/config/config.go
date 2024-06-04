@@ -6,9 +6,10 @@ import (
 )
 
 type Settings struct {
-	ArchiveURL     string   `json:"archive_url"`
-	FileSuffixList []string `json:"file_suffix_list"`
-	RefreshSeconds int      `json:"refresh_seconds"`
+	ArchiveURL       string   `json:"archive_url"`
+	MaxDownloadBytes int      `json:"max_download_bytes"`
+	FileSuffixList   []string `json:"file_suffix_list"`
+	RefreshSeconds   int      `json:"refresh_seconds"`
 }
 
 func Load(path string) (s *Settings, err error) {
